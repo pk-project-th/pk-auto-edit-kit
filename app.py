@@ -650,14 +650,36 @@ def check_groq_status():
     except Exception:
         return False, "ข้อผิดพลาดเครือข่าย"
 
+@st.cache_data(ttl=300)
+def check_gemini_status():
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not key:
+        return False, "ยังไม่ได้ระบุคีย์"
+    try:
+        res = requests.get(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash?key={key}",
+            timeout=3
+        )
+        if res.status_code == 200:
+            return True, "พร้อมใช้งาน (Gemini 3.6 Flash)"
+        return False, f"รหัส {res.status_code}"
+    except Exception:
+        return False, "ข้อผิดพลาดเครือข่าย"
+
 ai_is_ok, ai_msg = check_elevenlabs_status()
 groq_is_ok, groq_msg = check_groq_status()
+gemini_is_ok, gemini_msg = check_gemini_status()
 
 status_pills = []
 if groq_is_ok:
-    status_pills.append(f'<div class="ai-status-pill ai-status-ok">⚡ Groq Cloud: {groq_msg}</div>')
+    status_pills.append(f'<div class="ai-status-pill ai-status-ok">⚡ Groq Whisper: {groq_msg}</div>')
 else:
-    status_pills.append(f'<div class="ai-status-pill ai-status-err">⚡ Groq Cloud: {groq_msg}</div>')
+    status_pills.append(f'<div class="ai-status-pill ai-status-err">⚡ Groq Whisper: {groq_msg}</div>')
+
+if gemini_is_ok:
+    status_pills.append(f'<div class="ai-status-pill ai-status-ok">✨ Gemini 3.6: {gemini_msg}</div>')
+else:
+    status_pills.append(f'<div class="ai-status-pill ai-status-err">✨ Gemini: {gemini_msg}</div>')
 
 if ai_is_ok:
     status_pills.append(f'<div class="ai-status-pill ai-status-ok">🟢 ElevenLabs: {ai_msg}</div>')
@@ -735,10 +757,11 @@ with col_controls:
             "เลือกเอนจิน AI:",
             options=[
                 "🎯 ElevenLabs Scribe STT (โมเดลหลัก - แม่นยำสูงสุด)",
-                "⚡ Groq Cloud - Whisper Large v3 (เร็วระดับเสี้ยววินาที - ทางเลือก)"
+                "⚡ Groq Cloud - Whisper Large v3 / Turbo (เร็วพิเศษ)",
+                "✨ Google Gemini 3.6 Flash (มัลติโมดอลอัจฉริยะ)"
             ],
             index=0,
-            help="ElevenLabs Scribe เป็นโมเดลหลักที่ถอดเสียงภาษาไทยและชื่อแบรนด์/ศัพท์เฉพาะได้แม่นยำสูงสุด หรือเลือก Groq Cloud เมื่อต้องการความเร็วสูงพิเศษ",
+            help="เลือกเอนจิน AI: ElevenLabs แม่นยำสูงสุด, Groq Whisper สำหรับความเร็วระดับเสี้ยววินาที, หรือ Gemini 3.6 Flash",
             label_visibility="collapsed"
         )
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1067,8 +1090,15 @@ with col_subs:
 
     # Execute Transcription when Step 1 is clicked
     if btn_transcribe and video_path:
-        engine_label = "ElevenLabs Scribe STT" if "ElevenLabs" in stt_engine_choice else "Groq Whisper Large v3"
-        pref_engine = "elevenlabs" if "ElevenLabs" in stt_engine_choice else "groq"
+        if "ElevenLabs" in stt_engine_choice:
+            engine_label = "ElevenLabs Scribe STT"
+            pref_engine = "elevenlabs"
+        elif "Gemini" in stt_engine_choice:
+            engine_label = "Google Gemini 3.6 Flash"
+            pref_engine = "gemini"
+        else:
+            engine_label = "Groq Whisper Large v3 / Turbo"
+            pref_engine = "groq"
 
         with st.spinner(f"🤖 กำลังวิเคราะห์คลิปและถอดเสียงด้วย {engine_label}..."):
             if cut_silence_enabled:

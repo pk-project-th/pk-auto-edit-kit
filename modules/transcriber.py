@@ -93,36 +93,51 @@ def align_tokens_to_thai_words(raw_items: List[Dict[str, Any]]) -> List[Dict[str
     return words_list
 
 def transcribe_with_groq(audio_or_video_path: str, api_key: str) -> List[Dict[str, Any]]:
-    """Call Groq Whisper Large v3 API for ultra-fast Speech-to-Text with word timestamps."""
+    """Call Groq Whisper Large v3 / Turbo API for ultra-fast Speech-to-Text with word timestamps."""
     url = "https://api.groq.com/openai/v1/audio/transcriptions"
     headers = {"Authorization": f"Bearer {api_key}"}
 
     temp_wav = audio_or_video_path
     if not audio_or_video_path.lower().endswith(".wav"):
-        temp_wav = os.path.splitext(audio_or_video_path)[0] + "_temp.wav"
+        temp_wav = os.path.splitext(audio_or_video_path)[0] + "_groq_temp.wav"
         extract_audio(audio_or_video_path, temp_wav)
 
+    models_to_try = ["whisper-large-v3", "whisper-large-v3-turbo"]
+    last_error = None
+
     try:
-        with open(temp_wav, "rb") as f:
-            files = {"file": (os.path.basename(temp_wav), f, "audio/wav")}
-            data = {
-                "model": "whisper-large-v3",
-                "language": "th",
-                "response_format": "verbose_json",
-                "timestamp_granularities[]": "word"
-            }
-            res = requests.post(url, headers=headers, files=files, data=data, timeout=90)
-            res.raise_for_status()
-            result_json = res.json()
+        for model_name in models_to_try:
+            try:
+                with open(temp_wav, "rb") as f:
+                    files = {"file": (os.path.basename(temp_wav), f, "audio/wav")}
+                    data = {
+                        "model": model_name,
+                        "language": "th",
+                        "response_format": "verbose_json",
+                        "timestamp_granularities[]": "word"
+                    }
+                    res = requests.post(url, headers=headers, files=files, data=data, timeout=90)
+                    res.raise_for_status()
+                    result_json = res.json()
 
-        raw_items = result_json.get("words", [])
-        if not raw_items:
-            return []
+                raw_items = result_json.get("words", [])
+                if raw_items:
+                    print(f"[Transcriber] Groq {model_name} successfully returned {len(raw_items)} tokens.")
+                    return align_tokens_to_thai_words(raw_items)
+            except Exception as err:
+                print(f"[Transcriber] Groq model {model_name} failed: {err}. Retrying next Groq model...")
+                last_error = err
+                continue
 
-        return align_tokens_to_thai_words(raw_items)
-    except Exception as e:
-        print(f"[Transcriber] Groq Whisper error: {e}")
-        raise e
+        if last_error:
+            raise last_error
+        return []
+    finally:
+        if temp_wav != audio_or_video_path and os.path.exists(temp_wav):
+            try:
+                os.remove(temp_wav)
+            except Exception:
+                pass
 
 def transcribe_audio(
     audio_or_video_path: str,
@@ -147,8 +162,12 @@ def transcribe_audio(
     engines = []
     if preferred_engine == "groq":
         if groq_key: engines.append(("groq", groq_key))
-        if elevenlabs_key: engines.append(("elevenlabs", elevenlabs_key))
         if gemini_key: engines.append(("gemini", gemini_key))
+        if elevenlabs_key: engines.append(("elevenlabs", elevenlabs_key))
+    elif preferred_engine == "gemini":
+        if gemini_key: engines.append(("gemini", gemini_key))
+        if groq_key: engines.append(("groq", groq_key))
+        if elevenlabs_key: engines.append(("elevenlabs", elevenlabs_key))
     else:
         # ElevenLabs preferred or Auto
         if elevenlabs_key: engines.append(("elevenlabs", elevenlabs_key))
@@ -217,20 +236,25 @@ def transcribe_with_elevenlabs(audio_or_video_path: str, api_key: str) -> List[D
 
 def transcribe_with_gemini(audio_or_video_path: str, api_key: str) -> List[Dict[str, Any]]:
     """Use Gemini Flash to transcribe audio with word-level or phrase timestamps."""
-    # Convert to mp3/wav if needed and post to Gemini generateContent
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-    headers = {"Content-Type": "application/json"}
-    
     import base64
     temp_wav = audio_or_video_path
     if not audio_or_video_path.lower().endswith(".wav"):
         temp_wav = os.path.splitext(audio_or_video_path)[0] + "_gemini.wav"
         extract_audio(audio_or_video_path, temp_wav)
 
+    # gemini-3.6-flash is current flagship, fallback to gemini-flash-latest or gemini-2.5-flash
+    models_to_try = ["gemini-3.6-flash", "gemini-flash-latest", "gemini-2.5-flash"]
+    headers = {"Content-Type": "application/json"}
+
     try:
         with open(temp_wav, "rb") as f:
             audio_b64 = base64.b64encode(f.read()).decode("utf-8")
 
+        prompt = (
+            "Please transcribe the speech in Thai from this audio with word-level timestamps. "
+            "Output strict JSON array without markdown formatting: "
+            '[{"word": "...", "start": 0.0, "end": 0.5}]'
+        )
         payload = {
             "contents": [{
                 "parts": [
@@ -241,25 +265,35 @@ def transcribe_with_gemini(audio_or_video_path: str, api_key: str) -> List[Dict[
                         }
                     },
                     {
-                        "text": (
-                            "Please transcribe the speech in Thai from this audio with word-level timestamps. "
-                            "Output strict JSON array without markdown formatting: "
-                            "[{\"word\": \"...\", \"start\": 0.0, \"end\": 0.5}]"
-                        )
+                        "text": prompt
                     }
                 ]
-            }]
+            }],
+            "generationConfig": {
+                "responseMimeType": "application/json"
+            }
         }
-        res = requests.post(url, headers=headers, json=payload, timeout=60)
-        res.raise_for_status()
-        resp_data = res.json()
-        raw_text = resp_data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        if raw_text.startswith("```"):
-            raw_text = raw_text.split("```")[1]
-            if raw_text.startswith("json"):
-                raw_text = raw_text[4:]
-        words = json.loads(raw_text.strip())
-        return words
+
+        for model_name in models_to_try:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                res = requests.post(url, headers=headers, json=payload, timeout=60)
+                if res.status_code == 200:
+                    resp_data = res.json()
+                    raw_text = resp_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    if raw_text.startswith("```"):
+                        raw_text = raw_text.split("```")[1]
+                        if raw_text.startswith("json"):
+                            raw_text = raw_text[4:]
+                    words = json.loads(raw_text.strip())
+                    print(f"[Transcriber] Gemini {model_name} successfully transcribed {len(words)} words.")
+                    return words
+                else:
+                    print(f"[Transcriber] Gemini {model_name} returned {res.status_code}: {res.text[:120]}")
+            except Exception as err:
+                print(f"[Transcriber] Gemini {model_name} error: {err}")
+                continue
+        return []
     finally:
         if temp_wav != audio_or_video_path and os.path.exists(temp_wav):
             try:
