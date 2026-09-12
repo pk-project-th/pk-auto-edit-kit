@@ -212,7 +212,7 @@ def transcribe_with_elevenlabs(audio_or_video_path: str, api_key: str) -> List[D
 
     try:
         with open(temp_wav, "rb") as f:
-            files = {"file": f}
+            files = {"file": (os.path.basename(temp_wav), f, "audio/wav")}
             data = {
                 "model_id": "scribe_v1",
                 "language_code": "tha",

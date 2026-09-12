@@ -112,6 +112,7 @@ def main():
         input_path,
         elevenlabs_api_key=args.elevenlabs_key,
         gemini_api_key=args.gemini_key,
+        preferred_engine="elevenlabs",
         keep_segments=keep_segments
     )
     subtitles = chunk_word_timestamps(
