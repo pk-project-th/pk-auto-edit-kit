@@ -242,8 +242,8 @@ def transcribe_with_gemini(audio_or_video_path: str, api_key: str) -> List[Dict[
         temp_wav = os.path.splitext(audio_or_video_path)[0] + "_gemini.wav"
         extract_audio(audio_or_video_path, temp_wav)
 
-    # gemini-3.6-flash is current flagship, fallback to gemini-flash-latest or gemini-2.5-flash
-    models_to_try = ["gemini-3.6-flash", "gemini-flash-latest", "gemini-2.5-flash"]
+    # gemini-3.8-flash as requested, fallback to 3.7-flash or 3.6-flash if 503 High Demand
+    models_to_try = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]
     headers = {"Content-Type": "application/json"}
 
     try:
