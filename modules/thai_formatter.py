@@ -165,14 +165,22 @@ def chunk_word_timestamps(
         max_chars = max_chars_per_line
         max_dur = max_duration_per_chunk
 
-    sentence_endings = ("ค่ะ", "ครับ", "นะคะ", "นะครับ", "จ้า", "เด้อ", "เลยค่ะ", "เลยครับ", "เองค่ะ", "เองครับ")
+    sentence_endings = (
+        "ค่ะ", "ครับ", "นะคะ", "นะครับ", "จ้า", "เด้อ", "เลยค่ะ", "เลยครับ", "เองค่ะ", "เองครับ",
+        "ไม่ได้", "ไม่ได้เลย", "ได้เลย", "แล้ว", "กัน", "ดีกว่า"
+    )
     clause_openings = (
-        "หรือ", "หาก", "ถ้า", "และ", "แต่", "โดย", "ซึ่ง", "เพื่อ", "เพราะ",
-        "เกี่ยวกับ", "ราคาจะอยู่ที่", "อยู่ที่", "ผ่อนละ", "ผ่อนเริ่มต้น", "ดาวน์เริ่มต้น", "วันนี้จะมา"
+        "เชิญชวน", "ขอเชิญ", "ชวน", "แนะนำ", "สนใจ", "ติดต่อ", "ทัก", "ทักแชท", "โทร", "รีบ", "อย่าลืม",
+        "มาดู", "มาชม", "มาพบ", "มารับ", "แวะมา", "มาที่", "มาสด้า", "โชว์รูม",
+        "ใครที่", "สำหรับ", "ท่านใด", "ถ้าหาก", "หาก", "ถ้า", "เมื่อ",
+        "หรือ", "และ", "แต่", "โดย", "ซึ่ง", "เพื่อ", "เพราะ", "เกี่ยวกับ",
+        "ราคาจะอยู่ที่", "ราคา", "อยู่ที่", "ผ่อนละ", "ผ่อนเริ่มต้น", "ผ่อน", "ดาวน์เริ่มต้น", "ดาวน์",
+        "ดอกเบี้ย", "ส่วนลด", "โปรโมชัน", "วันนี้จะมา", "วันนี้"
     )
     ending_particles = ("ค่ะ", "ครับ", "นะคะ", "นะครับ", "จ้า", "เด้อ", "นะ", "ละ", "ล่ะ", "เอง", "เองค่ะ", "เองครับ")
     number_units = ("สิบ", "ร้อย", "พัน", "หมื่น", "แสน", "ล้าน", "บาท", "บาทค่ะ", "เปอร์เซ็นต์", "%", "เดือน", "วัน", "ปี", "งวด")
-    dangling_words = ("เกี่ยวกับ", "อยู่ที่", "ราคาจะอยู่ที่", "หรือเลือกรับ", "ดาวน์เริ่มต้น", "ผ่อนเริ่มต้น", "เลือกรับ", "ดอกเบี้ย")
+    dangling_words = ("เกี่ยวกับ", "อยู่ที่", "ราคาจะอยู่ที่", "หรือเลือกรับ", "ดาวน์เริ่มต้น", "ผ่อนเริ่มต้น", "เลือกรับ", "ดอกเบี้ย", "ใครที่")
+    anti_split_before = ("ไม่ได้", "ไม่เป็น", "ไม่อยู่", "ไม่มี", "นะคะ", "นะครับ", "ครับ", "ค่ะ", "เปอร์เซ็นต์", "%", "เดือน", "บาท", "บาทค่ะ", "งวด", "วัน", "ปี", "เอง", "เองค่ะ")
 
     chunks: List[Dict[str, Any]] = []
     current_tokens: List[Dict[str, Any]] = []
@@ -252,23 +260,29 @@ def chunk_word_timestamps(
         should_split = False
 
         if not next_is_ending_orphan and remaining:
-            # 1. Natural ending particle
-            if any(tok["word"].endswith(e) for e in sentence_endings):
-                if curr_dur >= 0.6 or len(curr_text) >= 10:
+            next_w = remaining[0]["word"].strip()
+            next_is_anti_split = any(next_w.startswith(asp) for asp in anti_split_before)
+
+            if not next_is_anti_split:
+                # 1. Natural ending particle or clause-ending verb/negation
+                if any(tok["word"].endswith(e) for e in sentence_endings):
+                    if curr_dur >= 0.5 or len(curr_text) >= 10:
+                        should_split = True
+
+                # 2. Next word is a clause opener or action verb (split before it starts)
+                elif any(next_w.startswith(op) for op in clause_openings):
+                    if curr_dur >= 0.6 or len(curr_text) >= 10:
+                        should_split = True
+
+                # 3. Audible gap in speech
+                elif (remaining[0]["start"] - tok["end"] > pause_threshold) and (curr_dur >= 0.5):
                     should_split = True
 
-            # 2. Next word is a clause opener
-            elif any(remaining[0]["word"].startswith(op) for op in clause_openings):
-                if curr_dur >= 0.8 or len(curr_text) >= 10:
+                # 4. Limit reached or lookahead overflow
+                elif curr_dur >= max_dur or len(curr_text) >= max_chars:
                     should_split = True
-
-            # 3. Audible gap in speech
-            elif (remaining[0]["start"] - tok["end"] > pause_threshold) and (curr_dur >= 0.6):
-                should_split = True
-
-            # 4. Limit reached
-            elif curr_dur >= max_dur or len(curr_text) >= max_chars:
-                should_split = True
+                elif len(curr_text) >= 14 and (len(curr_text) + len(next_w) > max_chars):
+                    should_split = True
 
         if should_split:
             flush_chunk()

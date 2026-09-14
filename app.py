@@ -745,10 +745,7 @@ with col_controls:
             video_path = st.session_state["uploaded_video_path"]
             st.caption(f"✅ ไฟล์ปัจจุบัน: `{os.path.basename(video_path)}`")
         else:
-            default_mazda = r"C:\Users\Marketing\Downloads\Clip\Car\Mazda 2\20-8-69\IMG_2321.mov"
-            if os.path.exists(default_mazda):
-                video_path = default_mazda
-                st.caption(f"📌 ไฟล์ตัวอย่างพร้อมใช้งาน: `{os.path.basename(default_mazda)}` (หรือกด Browse files ด้านบนเพื่อเปลี่ยนไฟล์)")
+            video_path = None
 
         # AI Speech Engine selection
         st.markdown("---")
@@ -790,7 +787,7 @@ with col_controls:
             font_size_val = st.slider("ขนาดตัวอักษร:", min_value=6.0, max_value=14.0, value=8.5, step=0.5, help="ขนาด 8.5 พอดีกับหน้าจอ ไม่ล้นคลิปแน่นอน")
 
         max_words = st.slider("คำสูงสุดต่อแถว:", min_value=3, max_value=8, value=5, step=1, help="ควบคุมให้ตัดแบ่งเป็นก้อนคำสั้นกระชับ")
-        letter_spacing = st.slider("ระยะห่างตัวหนังสือ (Letter Spacing):", min_value=0.0, max_value=6.0, value=2.0, step=0.5, help="เพิ่มช่องไฟระหว่างตัวอักษรให้อ่านง่าย โปร่ง สบายตา ไม่เบียดติดกัน")
+        letter_spacing = st.slider("ระยะห่างตัวหนังสือ (Letter Spacing):", min_value=0.0, max_value=8.0, value=3.5, step=0.5, help="เพิ่มช่องไฟระหว่างตัวอักษรให้อ่านง่าย โปร่ง สบายตา ไม่เบียดติดกัน")
 
         enable_ai_refine = st.checkbox(
             "✨ ขัดเกลาภาษาไทย & วรรคตอนอัจฉริยะด้วย Gemini LLM (AI Polish)",
@@ -978,6 +975,16 @@ with col_monitor:
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.caption(f"ความยาว: **{v_info['duration']:.2f}s** • ขนาด: **{v_info['width']}x{v_info['height']}** • **{v_info['fps']} fps**")
+    else:
+        st.markdown("""
+        <div style="border: 2px dashed #CBD5E1; border-radius: 16px; padding: 48px 20px; text-align: center; background: #F8FAFC; margin-top: 16px; margin-bottom: 24px;">
+            <div style="font-size: 3.5rem; margin-bottom: 12px;">🎬</div>
+            <div style="font-size: 1.15rem; font-weight: 700; color: #1E293B; margin-bottom: 8px;">พร้อมรับวิดีโอของคุณ</div>
+            <div style="font-size: 0.92rem; color: #64748B; max-width: 280px; margin: 0 auto; line-height: 1.5;">
+                กรุณากดปุ่ม <b style="color: #2563EB;">Browse files</b> ที่แผงด้านซ้ายเพื่อเลือกไฟล์วิดีโอ (.mp4, .mov)
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Metrics Summary (if analyzed)
     if "cached_analysis" in st.session_state and st.session_state.get("cached_video_path") == video_path:
@@ -1138,7 +1145,8 @@ with col_subs:
                     caption_mode="sentence",
                     lines_mode="1 แถว" if "1 แถว" in lines_mode else "2 แถว",
                     max_words_per_line=max_words,
-                    max_chars_per_line=24 if "1 แถว" in lines_mode else 50
+                    max_chars_per_line=22 if "1 แถว" in lines_mode else 46,
+                    pause_threshold=0.22
                 )
 
                 # Optional AI Refinement (Pass 2) via Gemini LLM

@@ -357,7 +357,7 @@ def create_capcut_project(
                 clip_scale = base_scale
             clip_scale = max(0.85, min(clip_scale, 1.85))
 
-            capcut_letter_spacing = round(letter_spacing * 0.04, 3)
+            capcut_letter_spacing = round(letter_spacing * 0.055, 3)
 
             effective_anim = anim_type if karaoke_mode else "none"
             if effective_anim == "none" and enable_pop and karaoke_mode:
