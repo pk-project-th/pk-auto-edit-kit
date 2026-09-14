@@ -1,5 +1,5 @@
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 try:
     from pythainlp.tokenize import word_tokenize
@@ -289,6 +289,220 @@ def chunk_word_timestamps(
 
     flush_chunk()
     return chunks
+
+def realign_subtitle_words(
+    text: str,
+    current_words: Optional[List[Dict[str, Any]]] = None,
+    master_words: Optional[List[Dict[str, Any]]] = None,
+    s_start: float = 0.0,
+    s_end: float = 0.0,
+    keep_segments: Optional[List[Dict[str, float]]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Dynamically re-aligns word tokens and timestamps when subtitle text is edited or words are moved.
+
+    Guarantees:
+    1. Words moved from other chunks preserve their exact millisecond speech timestamps.
+    2. Deleted words are cleanly removed from the word list.
+    3. Newly typed or edited words receive smooth interpolated timestamps.
+    4. Monotonically increasing timestamps prevent highlight jumping backwards.
+    5. Tokens exactly match the characters in `text` so karaoke focus never drifts.
+    6. Properly maps each token to both source time and edited timeline.
+    """
+    if not text or not text.strip():
+        return []
+
+    clean_text = text.strip()
+
+    # 1. Gather candidate words, prioritized by temporal proximity to [s_start, s_end]
+    raw_candidates: List[Dict[str, Any]] = []
+    if current_words:
+        for w in current_words:
+            if w.get("word") and str(w["word"]).strip():
+                raw_candidates.append(dict(w))
+
+    if master_words:
+        chunk_center = (s_start + s_end) / 2.0 if (s_start and s_end) else 0.0
+        sorted_master = sorted(
+            master_words,
+            key=lambda w: abs(((float(w.get("start", 0.0)) + float(w.get("end", 0.0))) / 2.0) - chunk_center)
+        )
+        for w in sorted_master:
+            if w.get("word") and str(w["word"]).strip():
+                raw_candidates.append(dict(w))
+
+    # Expand compound candidates into sub-tokens to support any token granularity
+    candidates: List[Dict[str, Any]] = []
+    for c in raw_candidates:
+        w_str = str(c.get("word", "")).strip()
+        if not w_str:
+            continue
+        candidates.append(c)
+        if HAS_PYTHAINLP:
+            try:
+                sub_toks = word_tokenize(w_str, engine="newmm")
+                if len(sub_toks) > 1:
+                    c_start = float(c.get("start", 0.0))
+                    c_end = float(c.get("end", c_start + 0.3))
+                    c_dur = max(0.05, c_end - c_start)
+                    total_len = len(w_str)
+                    curr_offset = 0
+                    for st in sub_toks:
+                        st_len = len(st)
+                        st_start = c_start + (curr_offset / total_len) * c_dur
+                        st_end = c_start + ((curr_offset + st_len) / total_len) * c_dur
+                        candidates.append({
+                            "word": st,
+                            "start": round(st_start, 3),
+                            "end": round(st_end, 3),
+                            "is_sub": True
+                        })
+                        curr_offset += st_len
+            except Exception:
+                pass
+
+    # 2. Tokenize clean_text into words
+    if HAS_PYTHAINLP:
+        try:
+            raw_tokens = word_tokenize(clean_text, engine="newmm")
+        except Exception:
+            raw_tokens = re.findall(r'\S+', clean_text)
+    else:
+        raw_tokens = re.findall(r'\S+', clean_text)
+
+    # Clean tokens: keep track of leading spaces
+    tokens: List[Dict[str, Any]] = []
+    curr_char_idx = 0
+    full_str = clean_text
+
+    for t in raw_tokens:
+        if not t.strip():
+            curr_char_idx += len(t)
+            continue
+
+        has_leading_space = False
+        pos_in_full = full_str.find(t, curr_char_idx)
+        if pos_in_full > 0 and full_str[pos_in_full - 1].isspace():
+            has_leading_space = True
+        if pos_in_full != -1:
+            curr_char_idx = pos_in_full + len(t)
+
+        tokens.append({
+            "word": t,
+            "leading_space": has_leading_space,
+            "char_len": len(t)
+        })
+
+    if not tokens:
+        return []
+
+    # 3. Match tokens to candidate words
+    aligned_words: List[Dict[str, Any]] = []
+    used_candidate_ids = set()
+
+    for tok_idx, tok in enumerate(tokens):
+        t_word = tok["word"]
+        matched_cand = None
+        best_dist = float("inf")
+
+        chunk_center = (s_start + s_end) / 2.0 if (s_start and s_end) else 0.0
+
+        for c_idx, cand in enumerate(candidates):
+            if cand.get("word") == t_word and c_idx not in used_candidate_ids:
+                cand_center = (float(cand.get("start", 0.0)) + float(cand.get("end", 0.0))) / 2.0
+                dist = abs(cand_center - chunk_center)
+                if dist < best_dist:
+                    best_dist = dist
+                    matched_cand = (c_idx, cand)
+
+        if matched_cand:
+            c_idx, cand = matched_cand
+            used_candidate_ids.add(c_idx)
+            w_start = float(cand.get("start", s_start))
+            w_end = float(cand.get("end", w_start + 0.3))
+            aligned_words.append({
+                "word": t_word,
+                "start": round(w_start, 3),
+                "end": round(w_end, 3),
+                "leading_space": tok["leading_space"],
+                "matched": True
+            })
+        else:
+            aligned_words.append({
+                "word": t_word,
+                "start": None,
+                "end": None,
+                "leading_space": tok["leading_space"],
+                "matched": False
+            })
+
+    # 4. Interpolate timestamps for unmatched (newly typed or split) tokens
+    total_tokens = len(aligned_words)
+    default_start = s_start
+    default_end = s_end if s_end > s_start else s_start + max(0.5, total_tokens * 0.3)
+
+    for i, w in enumerate(aligned_words):
+        if not w["matched"]:
+            prev_end = default_start
+            prev_idx = -1
+            for p in range(i - 1, -1, -1):
+                if aligned_words[p]["end"] is not None:
+                    prev_end = aligned_words[p]["end"]
+                    prev_idx = p
+                    break
+
+            next_start = default_end
+            next_idx = total_tokens
+            for n in range(i + 1, total_tokens):
+                if aligned_words[n]["start"] is not None:
+                    next_start = aligned_words[n]["start"]
+                    next_idx = n
+                    break
+
+            if next_start <= prev_end:
+                next_start = prev_end + 0.3 * (next_idx - prev_idx)
+
+            gap_tokens = next_idx - prev_idx
+            pos_in_gap = i - prev_idx
+            span = next_start - prev_end
+
+            w["start"] = round(prev_end + (pos_in_gap - 1) * (span / gap_tokens), 3)
+            w["end"] = round(prev_end + pos_in_gap * (span / gap_tokens), 3)
+            if w["end"] <= w["start"]:
+                w["end"] = round(w["start"] + 0.2, 3)
+
+    # 5. Ensure monotonically increasing timestamps
+    for i in range(1, len(aligned_words)):
+        if aligned_words[i]["start"] < aligned_words[i-1]["start"]:
+            aligned_words[i]["start"] = round(aligned_words[i-1]["end"] + 0.02, 3)
+            if aligned_words[i]["end"] <= aligned_words[i]["start"]:
+                aligned_words[i]["end"] = round(aligned_words[i]["start"] + 0.25, 3)
+
+    # 6. Map to timeline (with keep_segments)
+    final_words = []
+    for w in aligned_words:
+        w_s = w["start"]
+        w_e = w["end"]
+
+        if keep_segments:
+            tl_s = round(map_timestamp_to_edited_timeline(w_s, keep_segments), 3)
+            tl_e = round(map_timestamp_to_edited_timeline(w_e, keep_segments), 3)
+            if tl_e <= tl_s:
+                tl_e = round(tl_s + max(0.1, w_e - w_s), 3)
+        else:
+            tl_s = round(w_s, 3)
+            tl_e = round(w_e, 3)
+
+        final_words.append({
+            "word": w["word"],
+            "start": w_s,
+            "end": w_e,
+            "leading_space": w.get("leading_space", False),
+            "timeline_start": tl_s,
+            "timeline_end": tl_e
+        })
+
+    return final_words
 
 def get_word_character_ranges(full_text: str, words: List[Dict[str, Any]]) -> List[tuple]:
     """

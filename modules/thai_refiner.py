@@ -70,6 +70,16 @@ def refine_thai_captions_with_llm(
                         if idx in refined_dict and refined_dict[idx].strip():
                             chunk_copy["text"] = refined_dict[idx].strip()
                             chunk_copy["raw_text"] = refined_dict[idx].strip()
+                            try:
+                                from .thai_formatter import realign_subtitle_words
+                                chunk_copy["words"] = realign_subtitle_words(
+                                    text=chunk_copy["text"],
+                                    current_words=s.get("words", []),
+                                    s_start=s.get("source_start", 0.0),
+                                    s_end=s.get("source_end", 0.0)
+                                )
+                            except Exception:
+                                pass
                         output_chunks.append(chunk_copy)
 
                     print(f"[ThaiRefiner] ✅ Successfully refined {len(output_chunks)} Thai subtitle chunks with {model_name}!")

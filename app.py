@@ -38,7 +38,7 @@ importlib.reload(capcut_generator)
 from modules.ffmpeg_utils import get_video_info, render_video_with_subtitles
 from modules.silence_detector import analyze_and_cut
 from modules.transcriber import transcribe_audio
-from modules.thai_formatter import chunk_word_timestamps, generate_webvtt, map_timestamp_to_edited_timeline
+from modules.thai_formatter import chunk_word_timestamps, generate_webvtt, map_timestamp_to_edited_timeline, realign_subtitle_words
 from modules.capcut_generator import create_capcut_project, cleanup_old_autoedit_drafts
 
 # Page Configuration - Optimized for Desktop Widescreen
@@ -711,6 +711,95 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+def sync_subtitles_from_state():
+    """
+    Syncs subtitle text and timing from Streamlit widget session state into cached_subtitles.
+    Automatically triggers realign_subtitle_words if text or moved words change,
+    ensuring live Web Monitor preview, CapCut draft, and video export stay 100% in sync.
+    """
+    if "cached_subtitles" not in st.session_state or not st.session_state["cached_subtitles"]:
+        return
+
+    subs_list = st.session_state["cached_subtitles"]
+    analysis_data = st.session_state.get("cached_analysis", {})
+    keep_segs = analysis_data.get("keep_segments", [])
+
+    master_words = st.session_state.get("master_words")
+    if not master_words:
+        master_words = [w for s in subs_list for w in s.get("words", [])]
+        if master_words:
+            st.session_state["master_words"] = master_words
+
+    for sub in subs_list:
+        sub_id = sub.get("id")
+        if not sub_id:
+            continue
+
+        txt_key = f"sub_txt_{sub_id}"
+        s_key = f"start_val_{sub_id}"
+        e_key = f"end_val_{sub_id}"
+
+        curr_text = st.session_state.get(txt_key, sub.get("text", ""))
+        curr_start = float(st.session_state.get(s_key, sub.get("source_start", 0.0)))
+        curr_end = float(st.session_state.get(e_key, sub.get("source_end", 0.0)))
+
+        old_text = sub.get("text", "")
+        old_start = float(sub.get("source_start", 0.0))
+        old_end = float(sub.get("source_end", 0.0))
+
+        text_changed = (curr_text != old_text)
+        timing_changed = (round(curr_start, 2) != round(old_start, 2) or round(curr_end, 2) != round(old_end, 2))
+        words_missing = not sub.get("words")
+
+        if text_changed or words_missing:
+            realigned_words = realign_subtitle_words(
+                text=curr_text,
+                current_words=sub.get("words", []),
+                master_words=master_words,
+                s_start=curr_start,
+                s_end=curr_end,
+                keep_segments=keep_segs
+            )
+            sub["words"] = realigned_words
+            sub["text"] = curr_text
+
+            if realigned_words:
+                min_w_s = min(w["start"] for w in realigned_words)
+                max_w_e = max(w["end"] for w in realigned_words)
+                if max_w_e > curr_end:
+                    curr_end = round(max_w_e, 2)
+                    st.session_state[e_key] = curr_end
+                if min_w_s < curr_start:
+                    curr_start = round(min_w_s, 2)
+                    st.session_state[s_key] = curr_start
+
+        elif timing_changed and sub.get("words"):
+            old_dur = max(0.1, old_end - old_start)
+            new_dur = max(0.1, curr_end - curr_start)
+            for w in sub["words"]:
+                rel_s = (float(w.get("start", old_start)) - old_start) / old_dur
+                rel_e = (float(w.get("end", old_end)) - old_start) / old_dur
+                w["start"] = round(curr_start + rel_s * new_dur, 3)
+                w["end"] = round(curr_start + rel_e * new_dur, 3)
+                if keep_segs:
+                    w["timeline_start"] = round(map_timestamp_to_edited_timeline(w["start"], keep_segs), 3)
+                    w["timeline_end"] = round(map_timestamp_to_edited_timeline(w["end"], keep_segs), 3)
+                else:
+                    w["timeline_start"] = w["start"]
+                    w["timeline_end"] = w["end"]
+
+        sub["source_start"] = round(curr_start, 3)
+        sub["source_end"] = round(curr_end, 3)
+        if keep_segs:
+            sub["timeline_start"] = round(map_timestamp_to_edited_timeline(curr_start, keep_segs), 3)
+            sub["timeline_end"] = round(map_timestamp_to_edited_timeline(curr_end, keep_segs), 3)
+        else:
+            sub["timeline_start"] = round(curr_start, 3)
+            sub["timeline_end"] = round(curr_end, 3)
+        sub["duration"] = round(max(0.2, sub["timeline_end"] - sub["timeline_start"]), 3)
+
+    st.session_state["cached_subtitles"] = subs_list
+
 # 3-Column Desktop Studio Layout (Controls 30% | Live Monitor 31% | Subtitle Review 39%)
 col_controls, col_monitor, col_subs = st.columns([1.05, 1.1, 1.35], gap="medium")
 
@@ -909,6 +998,9 @@ with col_controls:
     # Step 1 Button
     btn_transcribe = st.button("🔍 ขั้นที่ 1: วิเคราะห์คลิป & ถอดเสียง (AI Transcribe)", type="primary", use_container_width=True)
 
+
+# Sync any user edits from session state to ensure Web Monitor, CapCut, and Export are 100% aligned
+sync_subtitles_from_state()
 
 # ==========================================
 # COLUMN 2: LIVE MONITOR & EXPORT (จอมอนิเตอร์ & ส่งออก)
@@ -1193,6 +1285,7 @@ with col_subs:
                 st.session_state["cached_analysis"] = analysis
                 st.session_state["cached_subtitles"] = subtitles
                 st.session_state["raw_ai_subtitles"] = [dict(s) for s in subtitles]
+                st.session_state["master_words"] = words
                 st.session_state["cached_video_path"] = video_path
                 st.session_state["selected_sub_idx"] = 0
                 st.session_state["preview_seek_time"] = 0
@@ -1244,6 +1337,16 @@ with col_subs:
                     new_e = max(0.1, round(float(s.get("source_end", 0.0)) - 0.1, 3))
                     s["source_start"] = new_s
                     s["source_end"] = new_e
+                    if s.get("words"):
+                        for w in s["words"]:
+                            w["start"] = max(0.0, round(float(w.get("start", 0.0)) - 0.1, 3))
+                            w["end"] = max(0.05, round(float(w.get("end", 0.0)) - 0.1, 3))
+                            if keep_segs:
+                                w["timeline_start"] = round(map_timestamp_to_edited_timeline(w["start"], keep_segs), 3)
+                                w["timeline_end"] = round(map_timestamp_to_edited_timeline(w["end"], keep_segs), 3)
+                            else:
+                                w["timeline_start"] = w["start"]
+                                w["timeline_end"] = w["end"]
                     if keep_segs:
                         s["timeline_start"] = round(map_timestamp_to_edited_timeline(new_s, keep_segs), 3)
                         s["timeline_end"] = round(map_timestamp_to_edited_timeline(new_e, keep_segs), 3)
@@ -1266,6 +1369,16 @@ with col_subs:
                     new_e = max(0.1, round(float(s.get("source_end", 0.0)) + 0.1, 3))
                     s["source_start"] = new_s
                     s["source_end"] = new_e
+                    if s.get("words"):
+                        for w in s["words"]:
+                            w["start"] = max(0.0, round(float(w.get("start", 0.0)) + 0.1, 3))
+                            w["end"] = max(0.05, round(float(w.get("end", 0.0)) + 0.1, 3))
+                            if keep_segs:
+                                w["timeline_start"] = round(map_timestamp_to_edited_timeline(w["start"], keep_segs), 3)
+                                w["timeline_end"] = round(map_timestamp_to_edited_timeline(w["end"], keep_segs), 3)
+                            else:
+                                w["timeline_start"] = w["start"]
+                                w["timeline_end"] = w["end"]
                     if keep_segs:
                         s["timeline_start"] = round(map_timestamp_to_edited_timeline(new_s, keep_segs), 3)
                         s["timeline_end"] = round(map_timestamp_to_edited_timeline(new_e, keep_segs), 3)
@@ -1285,14 +1398,16 @@ with col_subs:
                 last_end = float(subs_list[-1]["source_end"]) if subs_list else 0.0
                 new_start_t = round(last_end + 0.05, 3)
                 new_end_t = round(new_start_t + 1.8, 3)
+                new_txt = "ข้อความใหม่..."
                 new_item = {
                     "id": f"sub_{int(time.time()*1000)}",
-                    "text": "ข้อความใหม่...",
+                    "text": new_txt,
                     "source_start": new_start_t,
                     "source_end": new_end_t,
                     "timeline_start": round(map_timestamp_to_edited_timeline(new_start_t, keep_segs), 3) if keep_segs else new_start_t,
                     "timeline_end": round(map_timestamp_to_edited_timeline(new_end_t, keep_segs), 3) if keep_segs else new_end_t,
-                    "duration": 1.8
+                    "duration": 1.8,
+                    "words": realign_subtitle_words(new_txt, s_start=new_start_t, s_end=new_end_t, keep_segments=keep_segs)
                 }
                 subs_list.append(new_item)
                 st.session_state["cached_subtitles"] = subs_list
@@ -1301,7 +1416,8 @@ with col_subs:
 
             # Handle Reset AI
             if btn_reset_raw and "raw_ai_subtitles" in st.session_state:
-                raw_copies = [dict(s) for s in st.session_state["raw_ai_subtitles"]]
+                import copy
+                raw_copies = copy.deepcopy(st.session_state["raw_ai_subtitles"])
                 for s in raw_copies:
                     sid = s["id"]
                     if f"start_val_{sid}" in st.session_state:
@@ -1427,7 +1543,54 @@ with col_subs:
                                 st.session_state["selected_sub_idx"] = max(0, len(subs_list) - 1)
                             st.rerun()
 
-                    # Dynamically update subtitle object in list
+                    # Dynamically update subtitle object in list with realigned word focus
+                    old_text = sub.get("text", "")
+                    old_start = float(sub.get("source_start", 0.0))
+                    old_end = float(sub.get("source_end", 0.0))
+
+                    text_changed = (new_text != old_text)
+                    timing_changed = (round(new_start, 2) != round(old_start, 2) or round(new_end, 2) != round(old_end, 2))
+                    words_missing = not sub.get("words")
+
+                    master_words_pool = st.session_state.get("master_words") or [
+                        w for s_item in subs_list for w in s_item.get("words", [])
+                    ]
+
+                    if text_changed or words_missing:
+                        realigned_words = realign_subtitle_words(
+                            text=new_text,
+                            current_words=sub.get("words", []),
+                            master_words=master_words_pool,
+                            s_start=new_start,
+                            s_end=new_end,
+                            keep_segments=keep_segs
+                        )
+                        sub["words"] = realigned_words
+                        if realigned_words:
+                            min_w_s = min(w["start"] for w in realigned_words)
+                            max_w_e = max(w["end"] for w in realigned_words)
+                            if max_w_e > new_end:
+                                new_end = round(max_w_e, 2)
+                                st.session_state[f"end_val_{sub_id}"] = new_end
+                            if min_w_s < new_start:
+                                new_start = round(min_w_s, 2)
+                                st.session_state[f"start_val_{sub_id}"] = new_start
+
+                    elif timing_changed and sub.get("words"):
+                        old_dur = max(0.1, old_end - old_start)
+                        new_dur = max(0.1, new_end - new_start)
+                        for w in sub["words"]:
+                            rel_s = (float(w.get("start", old_start)) - old_start) / old_dur
+                            rel_e = (float(w.get("end", old_end)) - old_start) / old_dur
+                            w["start"] = round(new_start + rel_s * new_dur, 3)
+                            w["end"] = round(new_start + rel_e * new_dur, 3)
+                            if keep_segs:
+                                w["timeline_start"] = round(map_timestamp_to_edited_timeline(w["start"], keep_segs), 3)
+                                w["timeline_end"] = round(map_timestamp_to_edited_timeline(w["end"], keep_segs), 3)
+                            else:
+                                w["timeline_start"] = w["start"]
+                                w["timeline_end"] = w["end"]
+
                     sub["text"] = new_text
                     sub["source_start"] = round(new_start, 3)
                     sub["source_end"] = round(new_end, 3)
