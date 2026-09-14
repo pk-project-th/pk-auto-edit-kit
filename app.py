@@ -724,31 +724,35 @@ with col_controls:
     with st.container():
         st.markdown('<div class="studio-card">', unsafe_allow_html=True)
         st.markdown('<div class="studio-card-title">📂 1. เลือกไฟล์วิดีโอ & เครื่องยนต์ AI</div>', unsafe_allow_html=True)
-        is_cloud_env = not os.path.exists(r"C:\Users\Marketing\Downloads")
-        default_mode_idx = 1 if is_cloud_env else 0
-        input_mode = st.radio(
-            "วิธีป้อนไฟล์:",
-            options=["ระบุที่อยู่ไฟล์ในเครื่อง (เร็วสุด)", "อัปโหลดไฟล์ผ่านเว็บ"],
-            index=default_mode_idx,
-            horizontal=True,
-            label_visibility="collapsed"
+
+        up_file = st.file_uploader(
+            "📤 อัปโหลดไฟล์วิดีโอ (คลิก Browse files หรือลากไฟล์มาวางที่นี่):",
+            type=["mp4", "mov", "mkv", "avi"],
+            help="รองรับไฟล์วิดีโอ .mp4, .mov ทุกขนาด อัปโหลดได้ทันทีจากคอมพิวเตอร์ โทรศัพท์มือถือ และ iPad"
         )
+
         video_path = None
-        if input_mode == "ระบุที่อยู่ไฟล์ในเครื่อง (เร็วสุด)":
-            default_mazda = r"C:\Users\Marketing\Downloads\Clip\Car\Mazda 2\20-8-69\IMG_2321.mov"
-            custom_path = st.text_input("พาธไฟล์วิดีโอ:", value=default_mazda)
-            if os.path.exists(custom_path):
-                video_path = custom_path
-                st.caption(f"✅ พร้อมใช้งาน: `{os.path.basename(custom_path)}`")
-            else:
-                st.warning("⚠️ ไม่พบไฟล์ในพาธนี้ กรุณาตรวจสอบ")
+        if up_file is not None:
+            upload_dir = os.path.join(tempfile.gettempdir(), "auto_edit_uploads")
+            os.makedirs(upload_dir, exist_ok=True)
+            saved_upload_path = os.path.join(upload_dir, up_file.name)
+            with open(saved_upload_path, "wb") as f:
+                f.write(up_file.getbuffer())
+            video_path = saved_upload_path
+            st.success(f"✅ อัปโหลดสำเร็จ: `{up_file.name}` ({up_file.size / (1024*1024):.1f} MB)")
         else:
-            up_file = st.file_uploader("ลากไฟล์มาที่นี่ (.mp4, .mov):", type=["mp4", "mov", "mkv"])
-            if up_file:
-                tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-                tfile.write(up_file.read())
-                video_path = tfile.name
-                st.caption(f"✅ อัปโหลดสำเร็จ: `{up_file.name}`")
+            default_mazda = r"C:\Users\Marketing\Downloads\Clip\Car\Mazda 2\20-8-69\IMG_2321.mov"
+            with st.expander("📁 หรือระบุที่อยู่ไฟล์ในเครื่องคอมพิวเตอร์ (Local Path)", expanded=False):
+                custom_path = st.text_input("พาธไฟล์ในเครื่อง:", value=default_mazda if os.path.exists(default_mazda) else "")
+                if custom_path and os.path.exists(custom_path):
+                    video_path = custom_path
+                    st.caption(f"✅ พร้อมใช้งาน: `{os.path.basename(custom_path)}`")
+                elif custom_path:
+                    st.warning("⚠️ ไม่พบไฟล์ในพาธนี้ กรุณาตรวจสอบ")
+
+            if not video_path and os.path.exists(default_mazda):
+                video_path = default_mazda
+                st.caption(f"📌 ไฟล์เริ่มต้นพร้อมใช้งาน: `{os.path.basename(default_mazda)}` (หรือกด Browse files ด้านบนเพื่อเปลี่ยนไฟล์)")
 
         # AI Speech Engine selection
         st.markdown("---")
