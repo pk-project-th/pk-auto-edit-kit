@@ -1,4 +1,4 @@
-﻿[server]
+[server]
 maxUploadSize = 500
 enableCORS = false
 enableXsrfProtection = false
