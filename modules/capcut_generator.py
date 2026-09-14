@@ -24,7 +24,10 @@ def get_capcut_draft_dir() -> str:
         os.makedirs(fallback, exist_ok=True)
         return fallback
 
-    raise RuntimeError("Could not determine CapCut projects directory.")
+    import tempfile
+    cloud_fallback = os.path.join(tempfile.gettempdir(), "CapCut_Drafts")
+    os.makedirs(cloud_fallback, exist_ok=True)
+    return cloud_fallback
 
 def cleanup_old_autoedit_drafts(keep_recent: int = 3) -> int:
     """
