@@ -789,8 +789,13 @@ with col_controls:
         with f_c2:
             font_size_val = st.slider("ขนาดตัวอักษร:", min_value=6.0, max_value=14.0, value=8.5, step=0.5, help="ขนาด 8.5 พอดีกับหน้าจอ ไม่ล้นคลิปแน่นอน")
 
-        max_words = st.slider("คำสูงสุดต่อแถว:", min_value=3, max_value=8, value=5, step=1, help="ควบคุมให้ตัดแบ่งเป็นก้อนคำสั้นกระชับ")
         letter_spacing = st.slider("ระยะห่างตัวหนังสือ (Letter Spacing):", min_value=0.0, max_value=6.0, value=2.0, step=0.5, help="เพิ่มช่องไฟระหว่างตัวอักษรให้อ่านง่าย โปร่ง สบายตา ไม่เบียดติดกัน")
+
+        enable_ai_refine = st.checkbox(
+            "✨ ขัดเกลาภาษาไทย & วรรคตอนอัจฉริยะด้วย Gemini LLM (AI Polish)",
+            value=True,
+            help="ตรวจทานให้คำในประโยคเขียนติดกันตามหลักภาษาไทย และเว้นวรรคเฉพาะจุดที่ถูกต้อง เช่น คั่นชื่อแบรนด์, ภาษาอังกฤษ หรือตัวเลข"
+        )
 
         # Color & Stroke
         st.markdown("**สีข้อความหลัก (Base Color):**")
@@ -1131,6 +1136,17 @@ with col_subs:
                 max_words_per_line=max_words,
                 max_chars_per_line=24 if "1 แถว" in lines_mode else 50
             )
+
+            # Optional AI Refinement (Pass 2) via Gemini LLM
+            if enable_ai_refine and os.environ.get("GEMINI_API_KEY"):
+                with st.spinner("✨ กำลังขัดเกลาไวยากรณ์ไทยและจัดวรรคตอนด้วย Gemini LLM..."):
+                    try:
+                        from modules.thai_refiner import refine_thai_captions_with_llm
+                        refined_subs = refine_thai_captions_with_llm(subtitles)
+                        if refined_subs:
+                            subtitles = refined_subs
+                    except Exception as e:
+                        st.warning(f"⚠️ AI Polish warning: {e}")
 
             # Assign unique stable IDs
             timestamp_seed = int(time.time() * 1000)

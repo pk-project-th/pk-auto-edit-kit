@@ -69,20 +69,60 @@ def wrap_text_two_lines(
 
 def assemble_thai_tokens(tokens: List[Dict[str, Any]]) -> str:
     """
-    Joins Thai word tokens with natural spacing. Thai words are joined continuously,
-    while English words and natural pause spaces are preserved cleanly.
+    Joins Thai word tokens with natural spacing.
+    Thai words within the same sentence or clause are joined continuously (ติดกัน),
+    while spaces appear naturally at clause boundaries, after polite particles,
+    around English/numbers, and during audible speech pauses.
     """
+    if not tokens:
+        return ""
+
+    sentence_endings = ("ค่ะ", "ครับ", "นะคะ", "นะครับ", "จ้า", "เด้อ", "ฮะ", "เลยค่ะ", "เลยครับ")
+    clause_starters = ("หรือ", "หาก", "ถ้า", "และ", "แต่", "โดย", "ซึ่ง", "เพื่อ", "เพราะ", "เช่น", "รวมถึง")
+    ending_particles = ("ค่ะ", "ครับ", "นะคะ", "นะครับ", "จ้า", "เด้อ", "นะ", "ละ", "ล่ะ")
+    greetings = ("สวัสดี", "กราบสวัสดี", "ฮัลโหล", "หวัดดี")
+
     res = ""
     for idx, t in enumerate(tokens):
-        w = t["word"]
-        if idx > 0:
-            prev = tokens[idx - 1]["word"]
-            if t.get("leading_space") or prev.isascii() or w.isascii():
-                res += " " + w
-            else:
-                res += w
+        w = t["word"].strip()
+        if not w:
+            continue
+
+        if idx == 0:
+            res += w
+            continue
+
+        prev_tok = tokens[idx - 1]
+        prev_w = prev_tok["word"].strip()
+        is_curr_ascii = any(ord(c) < 128 for c in w)
+        is_prev_ascii = any(ord(c) < 128 for c in prev_w)
+        gap = float(t.get("start", 0.0)) - float(prev_tok.get("end", 0.0))
+
+        need_space = False
+        # 1. English or number boundary (e.g. รถยนต์ Mazda 2 นะคะ)
+        if is_curr_ascii or is_prev_ascii:
+            need_space = True
+        # 2. Never space immediately before an ending particle (e.g. สวัสดีค่ะ, รุ่นนี้นะคะ)
+        elif w in ending_particles:
+            need_space = False
+        # 3. Space before greeting after brand/place name (e.g. มาสด้าสินธานี สวัสดีค่ะ)
+        elif w in greetings:
+            need_space = True
+        # 4. Space after sentence ending particle (e.g. สวัสดีค่ะ วันนี้ / รุ่นนี้นะคะ ราคาเต็ม)
+        elif any(prev_w.endswith(end) for end in sentence_endings):
+            need_space = True
+        # 5. Space before clause starter / conjunction (e.g. หรือเลือกรับ...)
+        elif any(w.startswith(starter) for starter in clause_starters):
+            need_space = True
+        # 6. Audible pause gap (> 0.22s) between speech phrases
+        elif gap > 0.22:
+            need_space = True
+
+        if need_space:
+            res += " " + w
         else:
             res += w
+
     return res.strip()
 
 def chunk_word_timestamps(
@@ -125,11 +165,14 @@ def chunk_word_timestamps(
         max_chars = max_chars_per_line
         max_dur = max_duration_per_chunk
 
-    sentence_endings = ("ค่ะ", "ครับ", "นะคะ", "นะครับ", "จ้า", "เด้อ", "เลยค่ะ", "เลยครับ")
+    sentence_endings = ("ค่ะ", "ครับ", "นะคะ", "นะครับ", "จ้า", "เด้อ", "เลยค่ะ", "เลยครับ", "เองค่ะ", "เองครับ")
     clause_openings = (
         "หรือ", "หาก", "ถ้า", "และ", "แต่", "โดย", "ซึ่ง", "เพื่อ", "เพราะ",
-        "ผ่อน", "ราคาจะอยู่ที่", "อยู่ที่", "วันนี้จะมา"
+        "เกี่ยวกับ", "ราคาจะอยู่ที่", "อยู่ที่", "ผ่อนละ", "ผ่อนเริ่มต้น", "ดาวน์เริ่มต้น", "วันนี้จะมา"
     )
+    ending_particles = ("ค่ะ", "ครับ", "นะคะ", "นะครับ", "จ้า", "เด้อ", "นะ", "ละ", "ล่ะ", "เอง", "เองค่ะ", "เองครับ")
+    number_units = ("สิบ", "ร้อย", "พัน", "หมื่น", "แสน", "ล้าน", "บาท", "บาทค่ะ", "เปอร์เซ็นต์", "%", "เดือน", "วัน", "ปี", "งวด")
+    dangling_words = ("เกี่ยวกับ", "อยู่ที่", "ราคาจะอยู่ที่", "หรือเลือกรับ", "ดาวน์เริ่มต้น", "ผ่อนเริ่มต้น", "เลือกรับ", "ดอกเบี้ย")
 
     chunks: List[Dict[str, Any]] = []
     current_tokens: List[Dict[str, Any]] = []
@@ -195,30 +238,32 @@ def chunk_word_timestamps(
 
         # Anti-orphan check: Keep ending particles, number units, and closing words intact
         next_is_ending_orphan = False
-        number_units = ("สิบ", "ร้อย", "พัน", "หมื่น", "แสน", "ล้าน", "บาท", "บาทค่ะ")
-
-        if len(remaining) == 1 and any(remaining[0]["word"].endswith(e) for e in sentence_endings):
+        if len(remaining) == 1:
             next_is_ending_orphan = True
-        elif remaining and remaining[0]["word"] in ("นะคะ", "ค่ะ", "ครับ", "บาท", "บาทค่ะ", "เอง", "เองค่ะ"):
-            next_is_ending_orphan = True
-        elif remaining and remaining[0]["word"] in number_units and len(current_tokens) >= 1:
-            next_is_ending_orphan = True
+        elif remaining:
+            next_w = remaining[0]["word"].strip()
+            if any(next_w.endswith(e) for e in sentence_endings) or next_w in ending_particles:
+                next_is_ending_orphan = True
+            elif next_w in number_units and len(current_tokens) >= 1:
+                next_is_ending_orphan = True
+            elif tok["word"].strip() in dangling_words:
+                next_is_ending_orphan = True
 
         should_split = False
 
         if not next_is_ending_orphan and remaining:
             # 1. Natural ending particle
             if any(tok["word"].endswith(e) for e in sentence_endings):
-                if curr_dur >= 0.8 or len(curr_text) >= 12:
+                if curr_dur >= 0.6 or len(curr_text) >= 10:
                     should_split = True
 
             # 2. Next word is a clause opener
             elif any(remaining[0]["word"].startswith(op) for op in clause_openings):
-                if curr_dur >= 0.9 or len(curr_text) >= 12:
+                if curr_dur >= 0.8 or len(curr_text) >= 10:
                     should_split = True
 
             # 3. Audible gap in speech
-            elif (remaining[0]["start"] - tok["end"] > pause_threshold) and (curr_dur >= 0.8):
+            elif (remaining[0]["start"] - tok["end"] > pause_threshold) and (curr_dur >= 0.6):
                 should_split = True
 
             # 4. Limit reached

@@ -73,6 +73,7 @@ def main():
     parser.add_argument("--caption-mode", choices=["sentence", "short"], default="sentence", help="Subtitle chunking style: 'sentence' (full natural sentences) or 'short' (2-3 words)")
     parser.add_argument("--elevenlabs-key", default=None, help="ElevenLabs API key for Thai transcription")
     parser.add_argument("--gemini-key", default=None, help="Google Gemini API key for transcription / analysis")
+    parser.add_argument("--no-ai-refine", action="store_true", help="Skip Gemini AI Thai grammar and spacing refinement")
     parser.add_argument("--export-mp4", action="store_true", help="Also export a standalone cut MP4 file")
     parser.add_argument("--no-capcut", action="store_true", help="Skip creating CapCut draft")
 
@@ -120,6 +121,16 @@ def main():
         keep_segments=keep_segments,
         caption_mode=args.caption_mode
     )
+
+    if not args.no_ai_refine and (args.gemini_key or os.environ.get("GEMINI_API_KEY")):
+        try:
+            from modules.thai_refiner import refine_thai_captions_with_llm
+            refined = refine_thai_captions_with_llm(subtitles, gemini_api_key=args.gemini_key)
+            if refined:
+                subtitles = refined
+        except Exception as e:
+            print(f"[Warning] AI Thai refinement skipped: {e}")
+
     print(f"💬 Generated Subtitle Chunks: {len(subtitles)} captions")
     for i, sub in enumerate(subtitles[:5]):
         print(f"   [{sub['timeline_start']}s -> {sub['timeline_end']}s] {sub['text']}")
