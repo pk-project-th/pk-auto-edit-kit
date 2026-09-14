@@ -739,20 +739,16 @@ with col_controls:
             with open(saved_upload_path, "wb") as f:
                 f.write(up_file.getbuffer())
             video_path = saved_upload_path
+            st.session_state["uploaded_video_path"] = saved_upload_path
             st.success(f"✅ อัปโหลดสำเร็จ: `{up_file.name}` ({up_file.size / (1024*1024):.1f} MB)")
+        elif "uploaded_video_path" in st.session_state and os.path.exists(st.session_state["uploaded_video_path"]):
+            video_path = st.session_state["uploaded_video_path"]
+            st.caption(f"✅ ไฟล์ปัจจุบัน: `{os.path.basename(video_path)}`")
         else:
             default_mazda = r"C:\Users\Marketing\Downloads\Clip\Car\Mazda 2\20-8-69\IMG_2321.mov"
-            with st.expander("📁 หรือระบุที่อยู่ไฟล์ในเครื่องคอมพิวเตอร์ (Local Path)", expanded=False):
-                custom_path = st.text_input("พาธไฟล์ในเครื่อง:", value=default_mazda if os.path.exists(default_mazda) else "")
-                if custom_path and os.path.exists(custom_path):
-                    video_path = custom_path
-                    st.caption(f"✅ พร้อมใช้งาน: `{os.path.basename(custom_path)}`")
-                elif custom_path:
-                    st.warning("⚠️ ไม่พบไฟล์ในพาธนี้ กรุณาตรวจสอบ")
-
-            if not video_path and os.path.exists(default_mazda):
+            if os.path.exists(default_mazda):
                 video_path = default_mazda
-                st.caption(f"📌 ไฟล์เริ่มต้นพร้อมใช้งาน: `{os.path.basename(default_mazda)}` (หรือกด Browse files ด้านบนเพื่อเปลี่ยนไฟล์)")
+                st.caption(f"📌 ไฟล์ตัวอย่างพร้อมใช้งาน: `{os.path.basename(default_mazda)}` (หรือกด Browse files ด้านบนเพื่อเปลี่ยนไฟล์)")
 
         # AI Speech Engine selection
         st.markdown("---")
@@ -793,6 +789,7 @@ with col_controls:
         with f_c2:
             font_size_val = st.slider("ขนาดตัวอักษร:", min_value=6.0, max_value=14.0, value=8.5, step=0.5, help="ขนาด 8.5 พอดีกับหน้าจอ ไม่ล้นคลิปแน่นอน")
 
+        max_words = st.slider("คำสูงสุดต่อแถว:", min_value=3, max_value=8, value=5, step=1, help="ควบคุมให้ตัดแบ่งเป็นก้อนคำสั้นกระชับ")
         letter_spacing = st.slider("ระยะห่างตัวหนังสือ (Letter Spacing):", min_value=0.0, max_value=6.0, value=2.0, step=0.5, help="เพิ่มช่องไฟระหว่างตัวอักษรให้อ่านง่าย โปร่ง สบายตา ไม่เบียดติดกัน")
 
         enable_ai_refine = st.checkbox(
@@ -1098,72 +1095,75 @@ with col_subs:
     st.markdown("### 📝 ตรวจทาน & ปรับเวลา (Subtitle Studio)")
 
     # Execute Transcription when Step 1 is clicked
-    if btn_transcribe and video_path:
-        if "ElevenLabs" in stt_engine_choice:
-            engine_label = "ElevenLabs Scribe STT"
-            pref_engine = "elevenlabs"
-        elif "Gemini" in stt_engine_choice:
-            engine_label = "Google Gemini 3.8 Flash"
-            pref_engine = "gemini"
+    if btn_transcribe:
+        if not video_path or not os.path.exists(video_path):
+            st.error("⚠️ กรุณากดปุ่ม 'Browse files' อัปโหลดไฟล์วิดีโอด้านบนก่อนเริ่มวิเคราะห์ครับ")
         else:
-            engine_label = "Groq Whisper Large v3 / Turbo"
-            pref_engine = "groq"
-
-        with st.spinner(f"🤖 กำลังวิเคราะห์คลิปและถอดเสียงด้วย {engine_label}..."):
-            if cut_silence_enabled:
-                analysis = analyze_and_cut(
-                    video_path,
-                    noise_threshold_db=silence_db,
-                    min_silence_duration=min_silence,
-                    padding=padding
-                )
+            if "ElevenLabs" in stt_engine_choice:
+                engine_label = "ElevenLabs Scribe STT"
+                pref_engine = "elevenlabs"
+            elif "Gemini" in stt_engine_choice:
+                engine_label = "Google Gemini 3.8 Flash"
+                pref_engine = "gemini"
             else:
-                v_dur = get_video_info(video_path)["duration"]
-                analysis = {
-                    "original_duration": v_dur,
-                    "final_duration": v_dur,
-                    "silence_saved": 0.0,
-                    "keep_segments": [{"start": 0.0, "end": v_dur, "duration": v_dur}]
-                }
+                engine_label = "Groq Whisper Large v3 / Turbo"
+                pref_engine = "groq"
 
-            words = transcribe_audio(
-                video_path,
-                preferred_engine=pref_engine,
-                keep_segments=analysis["keep_segments"]
-            )
+            with st.spinner(f"🤖 กำลังวิเคราะห์คลิปและถอดเสียงด้วย {engine_label}..."):
+                if cut_silence_enabled:
+                    analysis = analyze_and_cut(
+                        video_path,
+                        noise_threshold_db=silence_db,
+                        min_silence_duration=min_silence,
+                        padding=padding
+                    )
+                else:
+                    v_dur = get_video_info(video_path)["duration"]
+                    analysis = {
+                        "original_duration": v_dur,
+                        "final_duration": v_dur,
+                        "silence_saved": 0.0,
+                        "keep_segments": [{"start": 0.0, "end": v_dur, "duration": v_dur}]
+                    }
 
-            subtitles = chunk_word_timestamps(
-                words,
-                keep_segments=analysis["keep_segments"],
-                caption_mode="sentence",
-                lines_mode="1 แถว" if "1 แถว" in lines_mode else "2 แถว",
-                max_words_per_line=max_words,
-                max_chars_per_line=24 if "1 แถว" in lines_mode else 50
-            )
+                words = transcribe_audio(
+                    video_path,
+                    preferred_engine=pref_engine,
+                    keep_segments=analysis["keep_segments"]
+                )
 
-            # Optional AI Refinement (Pass 2) via Gemini LLM
-            if enable_ai_refine and os.environ.get("GEMINI_API_KEY"):
-                with st.spinner("✨ กำลังขัดเกลาไวยากรณ์ไทยและจัดวรรคตอนด้วย Gemini LLM..."):
-                    try:
-                        from modules.thai_refiner import refine_thai_captions_with_llm
-                        refined_subs = refine_thai_captions_with_llm(subtitles)
-                        if refined_subs:
-                            subtitles = refined_subs
-                    except Exception as e:
-                        st.warning(f"⚠️ AI Polish warning: {e}")
+                subtitles = chunk_word_timestamps(
+                    words,
+                    keep_segments=analysis["keep_segments"],
+                    caption_mode="sentence",
+                    lines_mode="1 แถว" if "1 แถว" in lines_mode else "2 แถว",
+                    max_words_per_line=max_words,
+                    max_chars_per_line=24 if "1 แถว" in lines_mode else 50
+                )
 
-            # Assign unique stable IDs
-            timestamp_seed = int(time.time() * 1000)
-            for idx, s in enumerate(subtitles):
-                s["id"] = f"sub_{timestamp_seed}_{idx}"
+                # Optional AI Refinement (Pass 2) via Gemini LLM
+                if enable_ai_refine and os.environ.get("GEMINI_API_KEY"):
+                    with st.spinner("✨ กำลังขัดเกลาไวยากรณ์ไทยและจัดวรรคตอนด้วย Gemini LLM..."):
+                        try:
+                            from modules.thai_refiner import refine_thai_captions_with_llm
+                            refined_subs = refine_thai_captions_with_llm(subtitles)
+                            if refined_subs:
+                                subtitles = refined_subs
+                        except Exception as e:
+                            st.warning(f"⚠️ AI Polish warning: {e}")
 
-            st.session_state["cached_analysis"] = analysis
-            st.session_state["cached_subtitles"] = subtitles
-            st.session_state["raw_ai_subtitles"] = [dict(s) for s in subtitles]
-            st.session_state["cached_video_path"] = video_path
-            st.session_state["selected_sub_idx"] = 0
-            st.session_state["preview_seek_time"] = 0
-            st.rerun()
+                # Assign unique stable IDs
+                timestamp_seed = int(time.time() * 1000)
+                for idx, s in enumerate(subtitles):
+                    s["id"] = f"sub_{timestamp_seed}_{idx}"
+
+                st.session_state["cached_analysis"] = analysis
+                st.session_state["cached_subtitles"] = subtitles
+                st.session_state["raw_ai_subtitles"] = [dict(s) for s in subtitles]
+                st.session_state["cached_video_path"] = video_path
+                st.session_state["selected_sub_idx"] = 0
+                st.session_state["preview_seek_time"] = 0
+                st.rerun()
 
     # If we have cached transcription results
     if has_cached_subs and st.session_state["cached_subtitles"]:
