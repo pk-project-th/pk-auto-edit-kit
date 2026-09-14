@@ -726,9 +726,9 @@ with col_controls:
         st.markdown('<div class="studio-card-title">📂 1. เลือกไฟล์วิดีโอ & เครื่องยนต์ AI</div>', unsafe_allow_html=True)
 
         up_file = st.file_uploader(
-            "📤 อัปโหลดไฟล์วิดีโอ (คลิก Browse files หรือลากไฟล์มาวางที่นี่):",
-            type=["mp4", "mov", "mkv", "avi"],
-            help="รองรับไฟล์วิดีโอ .mp4, .mov ทุกขนาด อัปโหลดได้ทันทีจากคอมพิวเตอร์ โทรศัพท์มือถือ และ iPad"
+            "📤 อัปโหลดวิดีโอ/รูปภาพ (คลิก Browse files เพื่อเปิดคลังภาพในมือถือ):",
+            type=["mp4", "mov", "mkv", "avi", "png", "jpg", "jpeg", "heic"],
+            help="รองรับไฟล์วิดีโอ .mp4, .mov และรูปภาพ บน iPhone/Android จะเปิดคลังรูปภาพ (Photo Library) ให้เลือกได้ทันที"
         )
 
         video_path = None
@@ -1084,6 +1084,13 @@ with col_monitor:
                 mime="video/mp4",
                 use_container_width=True
             )
+            st.markdown("""
+            <div style="margin-top: 8px; margin-bottom: 8px;">
+                <a href="capcut://" target="_blank" style="display: block; width: 100%; padding: 12px; background: #000000; color: #FFFFFF !important; font-weight: 700; border-radius: 8px; text-decoration: none; text-align: center; font-size: 0.95rem; border: 1px solid #334155;">
+                    📱 แตะที่นี่เพื่อเปิดแอป CapCut ในมือถือ
+                </a>
+            </div>
+            """, unsafe_allow_html=True)
 
     # Clean Old Drafts button
     st.markdown("---")
