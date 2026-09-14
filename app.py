@@ -1092,6 +1092,24 @@ with col_monitor:
             </div>
             """, unsafe_allow_html=True)
 
+    # Step 2C: Export Subtitles File (.SRT) for CapCut Mobile Editable Text
+    st.markdown("---")
+    st.markdown("#### 📄 นำเข้าซับไตเติลเข้า CapCut มือถือ (แก้ไขข้อความได้ 100%)")
+    st.caption("💡 ดาวน์โหลดไฟล์ `.srt` ไปเปิดใน CapCut บนโทรศัพท์ (เมนู ข้อความ -> คำบรรยายอัตโนมัติ -> นำเข้าไฟล์) จะสามารถแตะแก้ไขคำ เปลี่ยนฟอนต์ หรือเปลี่ยนสีข้อความได้อิสระทุกคำครับ")
+
+    if has_cached_subs and st.session_state.get("cached_subtitles"):
+        from modules.thai_formatter import generate_srt
+        srt_data = generate_srt(st.session_state["cached_subtitles"], use_source_time=False)
+        st.download_button(
+            label="📥 ดาวน์โหลดไฟล์ซับไตเติล (.srt) แก้ไขข้อความใน CapCut มือถือได้",
+            data=srt_data.encode("utf-8"),
+            file_name=f"Subtitles_{time.strftime('%Y%m%d_%H%M%S')}.srt",
+            mime="text/plain",
+            use_container_width=True
+        )
+    else:
+        st.info("ℹ️ เมื่อกดวิเคราะห์คลิปในขั้นที่ 1 แล้ว จะมีปุ่มดาวน์โหลดไฟล์ `.srt` ขึ้นมาให้ตรงนี้ครับ")
+
     # Clean Old Drafts button
     st.markdown("---")
     if st.button("🧹 ล้าง Draft เก่าใน CapCut", help="ลบโฟลเดอร์โปรเจกต์ทดสอบเก่าเพื่อประหยัดพื้นที่ฮาร์ดดิสก์", use_container_width=True):
