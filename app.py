@@ -1,6 +1,5 @@
 import os
 import sys
-import importlib
 import tempfile
 import time
 import requests
@@ -20,20 +19,14 @@ try:
 except Exception:
     pass
 
-# Ensure local modules are accessible and dynamically reloaded
+# Detect if running on Streamlit Cloud (no LOCALAPPDATA = not Windows local)
+IS_CLOUD = (
+    os.environ.get("LOCALAPPDATA") is None and
+    os.environ.get("HOME", "").startswith("/home/")
+) or os.environ.get("STREAMLIT_SHARING_MODE") is not None
+
+# Ensure local modules are accessible
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-import modules.ffmpeg_utils as ffmpeg_utils
-import modules.silence_detector as silence_detector
-import modules.transcriber as transcriber
-import modules.thai_formatter as thai_formatter
-import modules.capcut_generator as capcut_generator
-
-importlib.reload(ffmpeg_utils)
-importlib.reload(silence_detector)
-importlib.reload(transcriber)
-importlib.reload(thai_formatter)
-importlib.reload(capcut_generator)
 
 from modules.ffmpeg_utils import get_video_info, render_video_with_subtitles
 from modules.silence_detector import analyze_and_cut
@@ -670,21 +663,6 @@ ai_is_ok, ai_msg = check_elevenlabs_status()
 groq_is_ok, groq_msg = check_groq_status()
 gemini_is_ok, gemini_msg = check_gemini_status()
 
-status_pills = []
-if groq_is_ok:
-    status_pills.append(f'<div class="ai-status-pill ai-status-ok">⚡ Groq Whisper: {groq_msg}</div>')
-else:
-    status_pills.append(f'<div class="ai-status-pill ai-status-err">⚡ Groq Whisper: {groq_msg}</div>')
-
-if gemini_is_ok:
-    status_pills.append(f'<div class="ai-status-pill ai-status-ok">✨ Gemini 3.8: {gemini_msg}</div>')
-else:
-    status_pills.append(f'<div class="ai-status-pill ai-status-err">✨ Gemini: {gemini_msg}</div>')
-
-if ai_is_ok:
-    status_pills.append(f'<div class="ai-status-pill ai-status-ok">🟢 ElevenLabs: {ai_msg}</div>')
-else:
-    status_pills.append(f'<div class="ai-status-pill ai-status-err">🔴 ElevenLabs: {ai_msg}</div>')
 def get_local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -693,10 +671,29 @@ def get_local_ip():
         s.close()
         return ip
     except Exception:
-        return "192.168.1.170"
+        return "192.168.1.x"
 
-local_ip = get_local_ip()
-status_pills.append(f'<div class="ai-status-pill" style="background:rgba(37,99,235,0.18); border:1px solid rgba(147,197,253,0.4); color:#DBEAFE;">📱 มือถือ/iPad: <b>http://{local_ip}:8501</b></div>')
+status_pills = []
+# ย่อ label ให้อ่านง่ายบนมือถือ
+if groq_is_ok:
+    status_pills.append('<div class="ai-status-pill ai-status-ok">⚡ Groq: พร้อม</div>')
+else:
+    status_pills.append(f'<div class="ai-status-pill ai-status-err">⚡ Groq: {groq_msg}</div>')
+
+if gemini_is_ok:
+    status_pills.append('<div class="ai-status-pill ai-status-ok">✨ Gemini: พร้อม</div>')
+else:
+    status_pills.append(f'<div class="ai-status-pill ai-status-err">✨ Gemini: {gemini_msg}</div>')
+
+if ai_is_ok:
+    status_pills.append('<div class="ai-status-pill ai-status-ok">🟢 ElevenLabs: พร้อม</div>')
+else:
+    status_pills.append(f'<div class="ai-status-pill ai-status-err">🔴 ElevenLabs: {ai_msg}</div>')
+
+# แสดง Local IP เฉพาะตอนใช้งานบนเครื่องตัวเองเท่านั้น (ไม่มีความหมายบน Streamlit Cloud)
+if not IS_CLOUD:
+    local_ip = get_local_ip()
+    status_pills.append(f'<div class="ai-status-pill" style="background:rgba(37,99,235,0.18); border:1px solid rgba(147,197,253,0.4); color:#DBEAFE;">📱 LAN: <b>{local_ip}:8501</b></div>')
 
 status_html = f'<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">{"".join(status_pills)}</div>'
 
@@ -995,8 +992,12 @@ with col_controls:
             padding = 0.06
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Step 1 Button
+    # Step 1 Button — อยู่ใน col_controls เพื่อให้ mobile layout ถูกต้อง
     btn_transcribe = st.button("🔍 ขั้นที่ 1: วิเคราะห์คลิป & ถอดเสียง (AI Transcribe)", type="primary", use_container_width=True)
+
+    # Cloud notice: CapCut Desktop ใช้ได้เฉพาะ Local
+    if IS_CLOUD:
+        st.info("ℹ️ **Streamlit Cloud Mode:** CapCut Desktop Export ไม่พร้อมใช้งานบน Cloud — ใช้ปุ่ม **ดาวน์โหลด MP4** หรือ **SRT** แทนได้ครับ", icon="☁️")
 
 
 # Sync any user edits from session state to ensure Web Monitor, CapCut, and Export are 100% aligned
@@ -1018,7 +1019,11 @@ with col_monitor:
 
     # Smartphone Preview Frame with Synchronized Subtitles (Pure & Clean)
     if video_path and os.path.exists(video_path):
-        v_info = get_video_info(video_path)
+        # Cache video info keyed on path — avoid re-running ffprobe every render cycle
+        _vi_cache_key = f"_vinfo_{video_path}"
+        if _vi_cache_key not in st.session_state:
+            st.session_state[_vi_cache_key] = get_video_info(video_path)
+        v_info = st.session_state[_vi_cache_key]
 
         # Dynamic focus cue style based on chosen animation type
         if anim_type == "glow":
@@ -1088,47 +1093,54 @@ with col_monitor:
 
     st.markdown("---")
 
-    # Step 2A: Send to CapCut Desktop
-    st.markdown("#### 🚀 ขั้นที่ 2: ส่งเข้า CapCut Desktop")
-    custom_proj_name = st.text_input("ตั้งชื่อโปรเจกต์ใน CapCut:", value=f"AutoEdit_{time.strftime('%Y%m%d_%H%M%S')}")
-    btn_final_capcut = st.button("🚀 ส่งเข้า CapCut Desktop ทันที", type="primary", use_container_width=True)
+    # Step 2A: Send to CapCut Desktop — ใช้ได้เฉพาะบนเครื่อง Local เท่านั้น
+    if not IS_CLOUD:
+        st.markdown("#### 🚀 ขั้นที่ 2: ส่งเข้า CapCut Desktop")
+        custom_proj_name = st.text_input("ตั้งชื่อโปรเจกต์ใน CapCut:", value=f"AutoEdit_{time.strftime('%Y%m%d_%H%M%S')}")
+        btn_final_capcut = st.button("🚀 ส่งเข้า CapCut Desktop ทันที", type="primary", use_container_width=True)
 
-    # Calculate CapCut Y coordinate from vertical percentage
-    capcut_y_pos = round((0.5 - (vert_pos_pct / 100.0)) * 2.0, 3)
+        # Calculate CapCut Y coordinate from vertical percentage
+        capcut_y_pos = round((0.5 - (vert_pos_pct / 100.0)) * 2.0, 3)
 
-    if btn_final_capcut:
-        if not has_cached_subs or not st.session_state.get("cached_subtitles"):
-            st.error("⚠️ กรุณากดปุ่ม '🔍 ขั้นที่ 1: วิเคราะห์คลิป & ถอดเสียง' ก่อนส่งเข้า CapCut ครับ")
-        else:
-            with st.spinner("📦 กำลังสร้างโปรเจกต์ใน CapCut Desktop พร้อมฟอนต์และสไตล์ที่กำหนด..."):
-                analysis_data = st.session_state["cached_analysis"]
-                edited_subs = st.session_state["cached_subtitles"]
+        if btn_final_capcut:
+            if not has_cached_subs or not st.session_state.get("cached_subtitles"):
+                st.error("⚠️ กรุณากดปุ่ม '🔍 ขั้นที่ 1: วิเคราะห์คลิป & ถอดเสียง' ก่อนส่งเข้า CapCut ครับ")
+            else:
+                with st.spinner("📦 กำลังสร้างโปรเจกต์ใน CapCut Desktop พร้อมฟอนต์และสไตล์ที่กำหนด..."):
+                    analysis_data = st.session_state["cached_analysis"]
+                    edited_subs = st.session_state["cached_subtitles"]
 
-                capcut_stroke_width = (stroke_val / 10.0) * 0.018
-                capcut_shadow_alpha = shadow_val / 100.0
+                    capcut_stroke_width = (stroke_val / 10.0) * 0.018
+                    capcut_shadow_alpha = shadow_val / 100.0
 
-                capcut_dir = create_capcut_project(
-                    video_path=video_path,
-                    keep_segments=analysis_data["keep_segments"],
-                    subtitles=edited_subs,
-                    project_name=custom_proj_name,
-                    font_name=chosen_font,
-                    font_size=font_size_val,
-                    text_color=rgb_color,
-                    focus_color=focus_rgb,
-                    stroke_width=capcut_stroke_width,
-                    stroke_color=[0.0, 0.0, 0.0],
-                    shadow_alpha=capcut_shadow_alpha,
-                    shadow_distance=5.0,
-                    text_y_position=capcut_y_pos,
-                    letter_spacing=letter_spacing,
-                    karaoke_mode=karaoke_mode,
-                    anim_type=anim_type,
-                    enable_pop=pop_anim
-                )
-                st.balloons()
-                st.success(f"🎉 **สร้างโปรเจกต์ใน CapCut Desktop สำเร็จสมบูรณ์!**")
-                st.info(f"📂 **โฟลเดอร์โปรเจกต์:** `{capcut_dir}`\n\n👉 **เปิด CapCut Desktop บนเครื่อง จะพบโปรเจกต์ `{custom_proj_name}` ขึ้นที่หน้าแรกทันที!**")
+                    try:
+                        capcut_dir = create_capcut_project(
+                            video_path=video_path,
+                            keep_segments=analysis_data["keep_segments"],
+                            subtitles=edited_subs,
+                            project_name=custom_proj_name,
+                            font_name=chosen_font,
+                            font_size=font_size_val,
+                            text_color=rgb_color,
+                            focus_color=focus_rgb,
+                            stroke_width=capcut_stroke_width,
+                            stroke_color=[0.0, 0.0, 0.0],
+                            shadow_alpha=capcut_shadow_alpha,
+                            shadow_distance=5.0,
+                            text_y_position=capcut_y_pos,
+                            letter_spacing=letter_spacing,
+                            karaoke_mode=karaoke_mode,
+                            anim_type=anim_type,
+                            enable_pop=pop_anim
+                        )
+                        st.balloons()
+                        st.success(f"🎉 **สร้างโปรเจกต์ใน CapCut Desktop สำเร็จสมบูรณ์!**")
+                        st.info(f"📂 **โฟลเดอร์โปรเจกต์:** `{capcut_dir}`\n\n👉 **เปิด CapCut Desktop บนเครื่อง จะพบโปรเจกต์ `{custom_proj_name}` ขึ้นที่หน้าแรกทันที!**")
+                    except Exception as capcut_err:
+                        st.error(f"❌ ไม่สามารถสร้างโปรเจกต์ CapCut ได้: {capcut_err}")
+    else:
+        st.markdown("#### 🚀 CapCut Desktop Export")
+        st.warning("⚠️ ฟีเจอร์นี้ใช้งานได้เฉพาะบนเครื่อง Local เท่านั้น — บน Streamlit Cloud กรุณาใช้ **ดาวน์โหลด MP4** หรือ **SRT** แทนครับ")
 
     # Step 2B: Direct MP4 Render & Download (No CapCut Required)
     st.markdown("---")
@@ -1142,52 +1154,56 @@ with col_monitor:
             with st.spinner("⏳ กำลังตัดเดดแอร์ + ฝังซับไตเติลลงในคลิป MP4 ด้วย FFmpeg..."):
                 analysis_data = st.session_state["cached_analysis"]
                 edited_subs = st.session_state["cached_subtitles"]
-
                 out_render_path = os.path.join(tempfile.gettempdir(), f"AutoEdit_{time.strftime('%Y%m%d_%H%M%S')}.mp4")
-                rendered_file = render_video_with_subtitles(
-                    video_path=video_path,
-                    keep_segments=analysis_data["keep_segments"],
-                    subtitles=edited_subs,
-                    output_path=out_render_path,
-                    font_name=chosen_font,
-                    font_size=font_size_val,
-                    text_color_hex=final_color_hex,
-                    focus_color_hex=final_focus_hex,
-                    stroke_val=stroke_val,
-                    shadow_val=shadow_val,
-                    vertical_position_pct=vert_pos_pct,
-                    letter_spacing=letter_spacing,
-                    karaoke_mode=karaoke_mode,
-                    anim_type=anim_type,
-                    enable_pop=pop_anim
-                )
+                try:
+                    rendered_file = render_video_with_subtitles(
+                        video_path=video_path,
+                        keep_segments=analysis_data["keep_segments"],
+                        subtitles=edited_subs,
+                        output_path=out_render_path,
+                        font_name=chosen_font,
+                        font_size=font_size_val,
+                        text_color_hex=final_color_hex,
+                        focus_color_hex=final_focus_hex,
+                        stroke_val=stroke_val,
+                        shadow_val=shadow_val,
+                        vertical_position_pct=vert_pos_pct,
+                        letter_spacing=letter_spacing,
+                        karaoke_mode=karaoke_mode,
+                        anim_type=anim_type,
+                        enable_pop=pop_anim
+                    )
+                    if os.path.exists(rendered_file):
+                        # อ่าน bytes ทันทีก่อนที่ Cloud container จะ clean /tmp
+                        with open(rendered_file, "rb") as _rf:
+                            st.session_state["rendered_mp4_bytes"] = _rf.read()
+                        st.session_state["rendered_mp4_name"] = os.path.basename(video_path or "video")
+                        st.success("✅ เรนเดอร์คลิปวิดีโอพร้อมซับไตเติลเสร็จเรียบร้อย!")
+                except Exception as render_err:
+                    st.error(f"❌ เกิดข้อผิดพลาดระหว่างเรนเดอร์วิดีโอ: {render_err}\n\nกรุณาตรวจสอบว่าไฟล์วิดีโอไม่เสียหาย หรือลองใช้ไฟล์ .mp4 แทน .mov")
 
-                if os.path.exists(rendered_file):
-                    st.session_state["rendered_mp4_path"] = rendered_file
-                    st.success("✅ เรนเดอร์คลิปวิดีโอพร้อมซับไตเติลเสร็จเรียบร้อย!")
-
-    # If rendered MP4 is ready, provide direct download button
-    if "rendered_mp4_path" in st.session_state and os.path.exists(st.session_state["rendered_mp4_path"]):
-        with open(st.session_state["rendered_mp4_path"], "rb") as f_mp4:
-            st.download_button(
-                label="⬇️ คลิกเพื่อดาวน์โหลดคลิป (.mp4) เข้าเครื่อง/มือถือ",
-                data=f_mp4.read(),
-                file_name=f"AutoEdit_{os.path.basename(video_path or 'video')}.mp4",
-                mime="video/mp4",
-                use_container_width=True
-            )
-            st.markdown("""
-            <div style="margin-top: 8px; margin-bottom: 8px;">
-                <a href="capcut://" target="_blank" style="display: block; width: 100%; padding: 12px; background: #000000; color: #FFFFFF !important; font-weight: 700; border-radius: 8px; text-decoration: none; text-align: center; font-size: 0.95rem; border: 1px solid #334155;">
-                    📱 แตะที่นี่เพื่อเปิดแอป CapCut ในมือถือ
-                </a>
-            </div>
-            """, unsafe_allow_html=True)
+    # If rendered MP4 bytes are ready, provide direct download button
+    if "rendered_mp4_bytes" in st.session_state and st.session_state["rendered_mp4_bytes"]:
+        _mp4_name = st.session_state.get("rendered_mp4_name", "video")
+        st.download_button(
+            label="⬇️ คลิกเพื่อดาวน์โหลดคลิป (.mp4) เข้าเครื่อง/มือถือ",
+            data=st.session_state["rendered_mp4_bytes"],
+            file_name=f"AutoEdit_{_mp4_name}.mp4",
+            mime="video/mp4",
+            use_container_width=True
+        )
+        st.markdown("""
+        <div style="margin-top: 8px; margin-bottom: 8px;">
+            <a href="capcut://" target="_blank" style="display: block; width: 100%; padding: 12px; background: #000000; color: #FFFFFF !important; font-weight: 700; border-radius: 8px; text-decoration: none; text-align: center; font-size: 0.95rem; border: 1px solid #334155;">
+                📱 แตะที่นี่เพื่อเปิดแอป CapCut ในมือถือ
+            </a>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Step 2C: Export Subtitles File (.SRT) for CapCut Mobile Editable Text
     st.markdown("---")
     st.markdown("#### 📄 นำเข้าซับไตเติลเข้า CapCut มือถือ (แก้ไขข้อความได้ 100%)")
-    st.caption("💡 ดาวน์โหลดไฟล์ `.srt` ไปเปิดใน CapCut บนโทรศัพท์ (เมนู ข้อความ -> คำบรรยายอัตโนมัติ -> นำเข้าไฟล์) จะสามารถแตะแก้ไขคำ เปลี่ยนฟอนต์ หรือเปลี่ยนสีข้อความได้อิสระทุกคำครับ")
+    st.caption("💡 ดาวน์โหลดไฟล์ `.srt` ไปเปิดใน CapCut บนโทรศัพท์ (เมนู ข้อความ → คำบรรยายอัตโนมัติ → นำเข้าไฟล์) จะสามารถแตะแก้ไขคำ เปลี่ยนฟอนต์ หรือเปลี่ยนสีข้อความได้อิสระทุกคำครับ")
 
     if has_cached_subs and st.session_state.get("cached_subtitles"):
         from modules.thai_formatter import generate_srt
@@ -1202,14 +1218,15 @@ with col_monitor:
     else:
         st.info("ℹ️ เมื่อกดวิเคราะห์คลิปในขั้นที่ 1 แล้ว จะมีปุ่มดาวน์โหลดไฟล์ `.srt` ขึ้นมาให้ตรงนี้ครับ")
 
-    # Clean Old Drafts button
-    st.markdown("---")
-    if st.button("🧹 ล้าง Draft เก่าใน CapCut", help="ลบโฟลเดอร์โปรเจกต์ทดสอบเก่าเพื่อประหยัดพื้นที่ฮาร์ดดิสก์", use_container_width=True):
-        deleted = cleanup_old_autoedit_drafts(keep_recent=1)
-        if deleted > 0:
-            st.success(f"ล้างดราฟต์เก่าไป {deleted} โฟลเดอร์เรียบร้อย!")
-        else:
-            st.info("ไม่มีดราฟต์เก่าที่ต้องลบ")
+    # Clean Old Drafts button — แสดงเฉพาะ Local เท่านั้น
+    if not IS_CLOUD:
+        st.markdown("---")
+        if st.button("🧹 ล้าง Draft เก่าใน CapCut", help="ลบโฟลเดอร์โปรเจกต์ทดสอบเก่าเพื่อประหยัดพื้นที่ฮาร์ดดิสก์", use_container_width=True):
+            deleted = cleanup_old_autoedit_drafts(keep_recent=1)
+            if deleted > 0:
+                st.success(f"ล้างดราฟต์เก่าไป {deleted} โฟลเดอร์เรียบร้อย!")
+            else:
+                st.info("ไม่มีดราฟต์เก่าที่ต้องลบ")
 
 
 # ==========================================
